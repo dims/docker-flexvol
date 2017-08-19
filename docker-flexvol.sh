@@ -43,21 +43,43 @@ ismounted() {
 
 domount() {
 	MNTPATH=$1
+	mkdir -p ${MNTPATH} &> /dev/null
 
     UUID=$(uuidgen)
     VOLUME_IMAGE=$(echo $2 | jq -r '.image')
-    VOLUME_NAME=$(echo $2 | jq -r '.name')
-    VOLUME_CONTAINER_ID=$(docker create -v $VOLUME_NAME --name $UUID $VOLUME_IMAGE /bin/true)
+    VOLUME_NAME=$(echo $2 | jq -r '.name | select(type!="null")')
 
-	mkdir -p ${MNTPATH} &> /dev/null
+    if [[ -z "${VOLUME_NAME}" ]]; then
+        VOLUME_CONTAINER_ID=$(docker create --name $UUID $VOLUME_IMAGE /bin/true)
+        if [[ -z "${VOLUME_CONTAINER_ID}" ]]; then
+            err "{ \"status\": \"Failure\", \"message\": \"Unable to find create container from image ${VOLUME_IMAGE}\"}"
+            exit 1
+        fi
 
-    VOLUME_CONTAINER_DATA_PATH=$(docker inspect $VOLUME_CONTAINER_ID | jq -r '..|.Mounts?[0]|select(type!="null")|select (.Destination=="'${VOLUME_NAME}'")|.Source')
+        pushd ${MNTPATH} &> /dev/null
+        docker export $VOLUME_CONTAINER_ID | tar -xf -
+        popd &>/dev/null
+        docker rm -f $VOLUME_CONTAINER_ID &> /dev/null
+    else
+        VOLUME_CONTAINER_ID=$(docker create -v $VOLUME_NAME --name $UUID $VOLUME_IMAGE /bin/true)
+        if [[ -z "${VOLUME_CONTAINER_ID}" ]]; then
+            err "{ \"status\": \"Failure\", \"message\": \"Unable to find create container from image ${VOLUME_IMAGE}\"}"
+            exit 1
+        fi
 
-    mount --bind $VOLUME_CONTAINER_DATA_PATH $MNTPATH &> /dev/null
-	if [ $? -ne 0 ]; then
-		err "{ \"status\": \"Failure\", \"message\": \"Failed to mount ${VOLUME_CONTAINER_DATA_PATH} at ${MNTPATH}\"}"
-		exit 1
-	fi
+        VOLUME_CONTAINER_DATA_PATH=$(docker inspect $VOLUME_CONTAINER_ID | jq -r '..|.Mounts?[0]|select(type!="null")|select (.Destination=="'${VOLUME_NAME}'")|.Source')
+        if [[ -z "${VOLUME_CONTAINER_DATA_PATH}" ]]; then
+            err "{ \"status\": \"Failure\", \"message\": \"Unable to find data path for ${VOLUME_CONTAINER_ID}\"}"
+            exit 1
+        fi
+
+        mount --bind $VOLUME_CONTAINER_DATA_PATH $MNTPATH &> /dev/null
+        if [ $? -ne 0 ]; then
+            err "{ \"status\": \"Failure\", \"message\": \"Failed to mount ${VOLUME_CONTAINER_DATA_PATH} at ${MNTPATH}\"}"
+            exit 1
+        fi
+    fi
+
 	log '{"status": "Success"}'
 	exit 0
 }
@@ -70,17 +92,24 @@ unmount() {
 	fi
 
     VOLUME_ID=$(findmnt ${MNTPATH} -cno SOURCE | sed 's/.*\[\([^]]*\)\].*/\1/g' | cut -f 6 -d '/')
+    if [[ -n "${VOLUME_ID}" ]]; then
+        # Hack to get the container id from the volume id (See https://github.com/moby/moby/issues/31436)
+        VOLUME_CONTAINER_ID=$(docker volume rm $VOLUME_ID 2>&1 | sed 's/.*\[\([^]]*\)\].*/\1/g')
 
-    # Hack to get the container id from the volume id (See https://github.com/moby/moby/issues/31436)
-    VOLUME_CONTAINER_ID=$(docker volume rm $VOLUME_ID 2>&1 | sed 's/.*\[\([^]]*\)\].*/\1/g')
+        umount ${MNTPATH} &> /dev/null
+        if [ $? -ne 0 ]; then
+            err "{ \"status\": \"Failed\", \"message\": \"Failed to unmount volume at ${MNTPATH}\"}"
+            exit 1
+        fi
 
-	umount ${MNTPATH} &> /dev/null
-	if [ $? -ne 0 ]; then
-		err "{ \"status\": \"Failed\", \"message\": \"Failed to unmount volume at ${MNTPATH}\"}"
-		exit 1
-	fi
-
-	docker rm -f $VOLUME_CONTAINER_ID
+        if [[ -n "${VOLUME_CONTAINER_ID}" ]]; then
+            docker rm -f $VOLUME_CONTAINER_ID &> /dev/null
+        fi
+    else
+        if [[ -n "${MNTPATH}" ]]; then
+            rm -rf ${MNTPATH}/*
+        fi
+    fi
 
 	log '{"status": "Success"}'
 	exit 0

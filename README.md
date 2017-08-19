@@ -34,7 +34,11 @@ You can now use Docker volumes as usual!
 
 ### Pod Config
 
-An example pod config would look like this:
+An example pod config would look like this. Note the `image` and `name` parameters. The `image` is the name of the
+container that we need to start. `name` is the name of the volume we need to mount.
+
+Note that `image` is mandatory, `name` is optional. If `name` is not specified all the contents of the container are
+made available to the pod.
 
 ```yaml
 apiVersion: v1
