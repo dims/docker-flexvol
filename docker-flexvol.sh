@@ -50,6 +50,8 @@ domount() {
   VOLUME_IMAGE=$(echo $2 | jq -r '.image')
   VOLUME_NAME=$(echo $2 | jq -r '.name | select(type!="null")')
 
+  docker pull $VOLUME_IMAGE &> /dev/null # check for image updates
+
   if [[ -z "${VOLUME_NAME}" ]]; then
     VOLUME_CONTAINER_ID=$(docker create --name $UUID $VOLUME_IMAGE /bin/true)
     if [[ -z "${VOLUME_CONTAINER_ID}" ]]; then
@@ -96,7 +98,6 @@ unmount() {
   if [[ -n "${VOLUME_ID}" ]]; then
     # Hack to get the container id from the volume id (See https://github.com/moby/moby/issues/31436)
     VOLUME_CONTAINER_ID=$(docker volume rm $VOLUME_ID 2>&1 | sed 's/.*\[\([^]]*\)\].*/\1/g')
-
     umount ${MNTPATH} &> /dev/null
     if [ $? -ne 0 ]; then
       err "{ \"status\": \"Failed\", \"message\": \"Failed to unmount volume at ${MNTPATH}\"}"
